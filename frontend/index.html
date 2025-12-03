@@ -472,4 +472,315 @@
         </div>
     </div>
 
-    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    <script>
+        // IMPORTANT: Update this to match your Flask API URL
+        const API_URL = 'http://127.0.0.1:5000/api';
+
+        // Initialize map centered on Zomba, Malawi
+        const map = L.map('map').setView([-15.3900, 35.3300], 12);
+
+        // Add OpenStreetMap tiles
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 18
+        }).addTo(map);
+
+        // Risk level colors
+        const riskColors = {
+            'critical': '#ef4444',
+            'high': '#f97316',
+            'moderate': '#fbbf24',
+            'low': '#10b981'
+        };
+
+        // Store layer groups for toggling
+        let riskZonesLayer = L.layerGroup().addTo(map);
+        let waterBodiesLayer = L.layerGroup().addTo(map);
+        let regionsLayer = L.layerGroup().addTo(map);
+        let markersLayer = L.layerGroup().addTo(map);
+
+        // Load all data
+        async function loadAllData() {
+            console.log('Loading all data...');
+            await Promise.all([
+                loadStatistics(),
+                loadAlerts(),
+                loadRiskZones(),
+                loadWaterBodies(),
+                loadRegions()
+            ]);
+        }
+
+        async function loadStatistics() {
+            try {
+                const res = await fetch(`${API_URL}/statistics`);
+                const data = await res.json();
+                
+                document.getElementById('statsGrid').innerHTML = `
+                    <div class="stat-card ${data.active_alerts > 0 ? 'danger' : 'success'}">
+                        <div class="number">${data.active_alerts || 0}</div>
+                        <div class="label">Active Alerts</div>
+                    </div>
+                    <div class="stat-card ${data.critical_zones > 0 ? 'danger' : 'success'}">
+                        <div class="number">${data.critical_zones || 0}</div>
+                        <div class="label">Critical Zones</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="number">${data.total_regions || 0}</div>
+                        <div class="label">Regions</div>
+                    </div>
+                    <div class="stat-card ${data.active_stations > 0 ? 'success' : 'warning'}">
+                        <div class="number">${data.active_stations || 0}</div>
+                        <div class="label">Stations</div>
+                    </div>
+                `;
+            } catch (err) {
+                console.error('Error loading statistics:', err);
+                document.getElementById('statsGrid').innerHTML = 
+                    '<div class="no-data">Error loading statistics</div>';
+            }
+        }
+
+        async function loadAlerts() {
+            try {
+                const res = await fetch(`${API_URL}/alerts/active`);
+                const data = await res.json();
+                
+                const alertsList = document.getElementById('alertsList');
+                
+                if (data.features.length === 0) {
+                    alertsList.innerHTML = '<div class="no-data">✓ No active alerts</div>';
+                    return;
+                }
+                
+                alertsList.innerHTML = data.features.map(feature => {
+                    const props = feature.properties;
+                    const alertClass = `alert-${props.alert_level}`;
+                    const date = new Date(props.issued_at).toLocaleString();
+                    
+                    const icon = props.alert_level === 'emergency' ? '🚨' :
+                                props.alert_level === 'warning' ? '⚠️' : '👁️';
+                    
+                    return `
+                        <div class="alert-card ${alertClass}">
+                            <h3>${icon} ${props.region_name}</h3>
+                            <p><strong>${props.alert_level.toUpperCase()}</strong></p>
+                            <p>${props.message}</p>
+                            <p class="time">Issued: ${date}</p>
+                        </div>
+                    `;
+                }).join('');
+            } catch (err) {
+                console.error('Error loading alerts:', err);
+                document.getElementById('alertsList').innerHTML = 
+                    '<div class="no-data">Error loading alerts</div>';
+            }
+        }
+
+        async function loadRiskZones() {
+            try {
+                const res = await fetch(`${API_URL}/risk-zones`);
+                const data = await res.json();
+                
+                riskZonesLayer.clearLayers();
+                
+                L.geoJSON(data, {
+                    style: feature => ({
+                        fillColor: riskColors[feature.properties.risk_level],
+                        fillOpacity: 0.5,
+                        color: riskColors[feature.properties.risk_level],
+                        weight: 2
+                    }),
+                    onEachFeature: (feature, layer) => {
+                        const props = feature.properties;
+                        layer.bindPopup(`
+                            <strong>Risk Assessment</strong><br>
+                            <strong>Level:</strong> ${props.risk_level.toUpperCase()}<br>
+                            <strong>Score:</strong> ${props.risk_score.toFixed(1)}/100<br>
+                            <strong>Updated:</strong> ${new Date(props.calculated_at).toLocaleString()}
+                        `);
+                    }
+                }).addTo(riskZonesLayer);
+                
+                console.log(`Loaded ${data.features.length} risk zones`);
+            } catch (err) {
+                console.error('Error loading risk zones:', err);
+            }
+        }
+
+        async function loadWaterBodies() {
+            try {
+                const res = await fetch(`${API_URL}/water-bodies`);
+                const data = await res.json();
+                
+                waterBodiesLayer.clearLayers();
+                
+                L.geoJSON(data, {
+                    style: {
+                        color: '#3b82f6',
+                        weight: 4,
+                        opacity: 0.8
+                    },
+                    onEachFeature: (feature, layer) => {
+                        const props = feature.properties;
+                        layer.bindPopup(`
+                            <strong>${props.name}</strong><br>
+                            <strong>Type:</strong> ${props.type}<br>
+                            <strong>Buffer Zone:</strong> ${props.buffer_zone_m}m
+                        `);
+                    }
+                }).addTo(waterBodiesLayer);
+                
+                console.log(`Loaded ${data.features.length} water bodies`);
+            } catch (err) {
+                console.error('Error loading water bodies:', err);
+            }
+        }
+
+        async function loadRegions() {
+            try {
+                const res = await fetch(`${API_URL}/regions`);
+                const data = await res.json();
+                
+                regionsLayer.clearLayers();
+                
+                L.geoJSON(data, {
+                    style: {
+                        fillColor: 'transparent',
+                        color: '#64748b',
+                        weight: 2,
+                        dashArray: '5, 5',
+                        opacity: 0.6
+                    },
+                    onEachFeature: (feature, layer) => {
+                        const props = feature.properties;
+                        layer.bindPopup(`
+                            <strong>${props.name}</strong><br>
+                            <strong>District:</strong> ${props.district}<br>
+                            <strong>Population:</strong> ${props.population.toLocaleString()}
+                        `);
+                    }
+                }).addTo(regionsLayer);
+                
+                console.log(`Loaded ${data.features.length} regions`);
+            } catch (err) {
+                console.error('Error loading regions:', err);
+            }
+        }
+
+        async function checkRisk() {
+            const lat = parseFloat(document.getElementById('checkLat').value);
+            const lng = parseFloat(document.getElementById('checkLng').value);
+            
+            if (!lat || !lng) {
+                alert('Please enter valid coordinates');
+                return;
+            }
+
+            const resultDiv = document.getElementById('riskResult');
+            resultDiv.innerHTML = '<div class="loading">Calculating risk</div>';
+
+            try {
+                const res = await fetch(`${API_URL}/calculate-risk`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lat, lng })
+                });
+                
+                const data = await res.json();
+                
+                if (data.success) {
+                    const color = riskColors[data.risk_level];
+                    resultDiv.innerHTML = `
+                        <div class="risk-result" style="border-left: 4px solid ${color};">
+                            <h3 style="color: ${color};">Risk Assessment</h3>
+                            <p><strong>Level:</strong> ${data.risk_level.toUpperCase()}</p>
+                            <p><strong>Score:</strong> ${data.risk_score}/100</p>
+                            <p style="font-size: 0.85rem; color: #6b7280; margin-top: 0.5rem;">
+                                ${data.description}
+                            </p>
+                        </div>
+                    `;
+                    
+                    // Clear previous markers
+                    markersLayer.clearLayers();
+                    
+                    // Add marker with custom color
+                    const marker = L.circleMarker([lat, lng], {
+                        radius: 10,
+                        fillColor: color,
+                        color: '#fff',
+                        weight: 2,
+                        opacity: 1,
+                        fillOpacity: 0.8
+                    })
+                    .addTo(markersLayer)
+                    .bindPopup(`
+                        <strong>Risk Assessment</strong><br>
+                        Score: ${data.risk_score}/100<br>
+                        Level: ${data.risk_level.toUpperCase()}
+                    `)
+                    .openPopup();
+                    
+                    map.setView([lat, lng], 14);
+                } else {
+                    resultDiv.innerHTML = `
+                        <div class="risk-result" style="border-left: 4px solid #ef4444;">
+                            <p style="color: #ef4444;">Error: ${data.error}</p>
+                        </div>
+                    `;
+                }
+            } catch (err) {
+                console.error('Error calculating risk:', err);
+                resultDiv.innerHTML = `
+                    <div class="risk-result" style="border-left: 4px solid #ef4444;">
+                        <p style="color: #ef4444;">Error calculating risk. Check console for details.</p>
+                    </div>
+                `;
+            }
+        }
+
+        // Check API connection
+        async function checkAPIConnection() {
+            try {
+                const res = await fetch(`${API_URL}/health`);
+                const data = await res.json();
+                
+                const badge = document.getElementById('statusBadge');
+                if (data.status === 'healthy') {
+                    badge.className = 'status-badge connected';
+                    badge.innerHTML = '● Connected to API';
+                } else {
+                    badge.className = 'status-badge';
+                    badge.innerHTML = '● API Error';
+                }
+            } catch (err) {
+                const badge = document.getElementById('statusBadge');
+                badge.className = 'status-badge';
+                badge.innerHTML = '● Disconnected';
+                console.error('API connection error:', err);
+            }
+        }
+
+        // Load data on page load
+        window.addEventListener('load', () => {
+            console.log('Page loaded, initializing...');
+            checkAPIConnection();
+            loadAllData();
+        });
+
+        // Refresh data every 5 minutes
+        setInterval(() => {
+            console.log('Auto-refreshing data...');
+            loadStatistics();
+            loadAlerts();
+        }, 300000);
+
+        // Allow Enter key to calculate risk
+        document.getElementById('checkLng').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') checkRisk();
+        });
+    </script>
+</body>
+</html>
